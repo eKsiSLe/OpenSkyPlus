@@ -296,6 +296,14 @@ public class OpenSkyPlusApi : AbstractOpenSkyPlusApi
                     BindingFlags.Public | BindingFlags.Instance)?
                 .GetValue(spinData) ?? 0f);
 
+            // Optionally, if the launch monitor supplies a distance to the hole,
+            // parse and set shotData.DistanceToHole here.
+            // For example:
+            // shotData.DistanceToHole = (float)(speedData?
+            //     .GetType()
+            //     .GetField("DistanceToHole", BindingFlags.Public | BindingFlags.Instance)?
+            //     .GetValue(speedData) ?? 0f);
+
             LogShot(shotData);
             if (IsValidShot(shotData))
             {
@@ -325,7 +333,22 @@ public class OpenSkyPlusApi : AbstractOpenSkyPlusApi
         var shotMode = GetInstance().GetShotMode();
         if (shotMode == ShotMode.Putting)
         {
-            // club data is not returned in putting mode
+            // Additional validation for Putting shots:
+            // If the shot is a putting shot and its DistanceToHole is known and within the configured threshold,
+            // ensure that the horizontal launch angle is within the optimal deviation.
+            if (shot is LaunchMonitorShotData puttingShot &&
+                puttingShot.DistanceToHole > 0 &&
+                puttingShot.DistanceToHole <= _config.AppSettings.PuttingDistanceThreshold)
+            {
+                if (Math.Abs(shot.Launch.HorizontalAngle) > _config.AppSettings.PuttingOptimalMaxDeviation)
+                {
+                    _logger.LogWarning($"Putting shot: HorizontalAngle {shot.Launch.HorizontalAngle}° exceeds optimal deviation " +
+                        $"({_config.AppSettings.PuttingOptimalMaxDeviation}°) at distance {puttingShot.DistanceToHole}ft. Clamping to 0.");
+                    shot.Launch.HorizontalAngle = 0f;
+                }
+            }
+
+            // In putting mode, club data is not returned.
             if (shot.Launch.LaunchAngleConfidence == 0 && shot.Launch.HorizontalAngleConfidence == 0)
                 launchConfidence = 0;
             else if (shot.Launch.LaunchAngleConfidence == 0 || shot.Launch.HorizontalAngleConfidence == 0)
@@ -337,9 +360,7 @@ public class OpenSkyPlusApi : AbstractOpenSkyPlusApi
             else
                 launchConfidence = 0;
 
-            // spin data is not returned in putting mode
-            _logger.LogDebug(
-                $"[{shotMode}] Confidence: launch={launchConfidence}. Mode: {_config.AppSettings.ShotConfidence}");
+            _logger.LogDebug($"[Putting] Confidence: launch={launchConfidence}. Mode: {_config.AppSettings.ShotConfidence}");
 
             return _config.AppSettings.ShotConfidence switch
             {
@@ -349,7 +370,7 @@ public class OpenSkyPlusApi : AbstractOpenSkyPlusApi
             };
         }
 
-        // Normal
+        // For normal (non-putting) shots:
         float clubConfidence;
         float spinConfidence;
 
@@ -382,11 +403,11 @@ public class OpenSkyPlusApi : AbstractOpenSkyPlusApi
         else
             spinConfidence = 0;
 
-        float[] confidences = [clubConfidence, launchConfidence, spinConfidence];
+        float[] confidences = { clubConfidence, launchConfidence, spinConfidence };
         var averageConfidence = confidences.Average();
 
-        _logger.LogDebug(
-            $"[{shotMode}] Confidence:: club={clubConfidence}, launch={launchConfidence}, spin={spinConfidence}.  Avg:{averageConfidence}. Confidence Mode: {_config.AppSettings.ShotConfidence}");
+        _logger.LogDebug($"[{shotMode}] Confidence:: club={clubConfidence}, launch={launchConfidence}, spin={spinConfidence}. Avg:{averageConfidence}. " +
+                         $"Confidence Mode: {_config.AppSettings.ShotConfidence}");
 
         return _config.AppSettings.ShotConfidence switch
         {
@@ -403,6 +424,13 @@ public class OpenSkyPlusApi : AbstractOpenSkyPlusApi
         sb.AppendLine("----");
         sb.AppendLine($"\tHead Speed: {shot.Club.HeadSpeed}");
         sb.AppendLine($"\tHead Speed Confidence: {shot.Club.HeadSpeedConfidence}");
+        if (shot.Club is LaunchMonitorShotData.LaunchMonitorClubData clubData)
+        {
+            sb.AppendLine($"\tClub Path: {clubData.ClubPath}");
+            sb.AppendLine($"\tFace To Path: {clubData.FaceToPath}");
+            sb.AppendLine($"\tFace To Target: {clubData.FaceToTarget}");
+            sb.AppendLine($"\tAngle Of Attack: {clubData.AngleOfAttack}");
+        }
         sb.AppendLine("LaunchData");
         sb.AppendLine("------");
         sb.AppendLine($"\tHorizontal Angle: {shot.Launch.HorizontalAngle}");
@@ -416,7 +444,7 @@ public class OpenSkyPlusApi : AbstractOpenSkyPlusApi
         sb.AppendLine($"\tSpin Axis: {shot.Spin.SpinAxis}");
         sb.AppendLine($"\tBackspin: {shot.Spin.Backspin}");
         sb.AppendLine($"\tSide Spin: {shot.Spin.SideSpin}");
-        sb.AppendLine($"\tTotal Spin spin: {shot.Spin.TotalSpin}");
+        sb.AppendLine($"\tTotal Spin: {shot.Spin.TotalSpin}");
         sb.AppendLine($"\tMeasurement Confidence: {shot.Spin.MeasurementConfidence}");
         _logger.LogInfo(sb.ToString());
     }
@@ -449,270 +477,19 @@ public class OpenSkyPlusApi : AbstractOpenSkyPlusApi
     }
 
     /// <summary>
-    ///     Logs all the raw data from a shot.
-    ///     Useful for understanding what we are looking at. We probably don't need it anymore,
-    ///     but it was annoying to write, so I'm leaving it here in case its needed later.
+    /// Logs all the raw data from a shot.
     /// </summary>
     private void ShotDump(object shot)
     {
         var Shot = shot.GetType();
 
-        var FDDDFMHPPEP = Shot.GetField("FDDDFMHPPEP",
-                BindingFlags.Public | BindingFlags.Instance)
-            .GetValue(shot);
+        var FDDDFMHPPEP = Shot.GetField("FDDDFMHPPEP", BindingFlags.Public | BindingFlags.Instance).GetValue(shot);
+        var GGEGJMKCNOP = Shot.GetField("GGEGJMKCNOP", BindingFlags.Public | BindingFlags.Instance).GetValue(shot);
+        var MHLDAHLDJFE = Shot.GetField("MHLDAHLDJFE", BindingFlags.Public | BindingFlags.Instance).GetValue(shot);
+        var LDLMHJGLBDF = Shot.GetField("LDLMHJGLBDF", BindingFlags.Public | BindingFlags.Instance).GetValue(shot);
+        var DLIIJJNCIPP = Shot.GetField("DLIIJJNCIPP", BindingFlags.Public | BindingFlags.Instance).GetValue(shot);
 
-        var GGEGJMKCNOP = Shot.GetField("GGEGJMKCNOP",
-                BindingFlags.Public | BindingFlags.Instance)
-            .GetValue(shot);
-
-        var MHLDAHLDJFE = Shot.GetField("MHLDAHLDJFE",
-                BindingFlags.Public | BindingFlags.Instance)
-            .GetValue(shot);
-
-        var LDLMHJGLBDF = Shot.GetField("LDLMHJGLBDF",
-                BindingFlags.Public | BindingFlags.Instance)
-            .GetValue(shot);
-
-        var DLIIJJNCIPP = Shot.GetField("DLIIJJNCIPP",
-                BindingFlags.Public | BindingFlags.Instance)
-            .GetValue(shot);
-
-        /////////////////
-        // FDDDFMHPPEP //
-        /////////////////
-
-        var FDDDFMHPPEP_T = FDDDFMHPPEP.GetType();
-
-        _logger.LogDebug("FDDDFMHPPEP:");
-
-        var BAFOBJEAGMN = (float)FDDDFMHPPEP_T.GetField("BAFOBJEAGMN",
-                BindingFlags.Public | BindingFlags.Instance)
-            .GetValue(FDDDFMHPPEP);
-        _logger.LogDebug($"BAFOBJEAGMN: {BAFOBJEAGMN}");
-
-        var GMBPBDLKJEG = (float)FDDDFMHPPEP_T.GetField("GMBPBDLKJEG",
-                BindingFlags.Public | BindingFlags.Instance)
-            .GetValue(FDDDFMHPPEP);
-        _logger.LogDebug($"GMBPBDLKJEG: {GMBPBDLKJEG}");
-
-        var EDNNKEPLHKC = (float)FDDDFMHPPEP_T.GetField("EDNNKEPLHKC",
-                BindingFlags.Public | BindingFlags.Instance)
-            .GetValue(FDDDFMHPPEP);
-        _logger.LogDebug($"EDNNKEPLHKC: {EDNNKEPLHKC}");
-
-        var GMGMMCENIPA = (float)FDDDFMHPPEP_T.GetField("GMGMMCENIPA",
-                BindingFlags.Public | BindingFlags.Instance)
-            .GetValue(FDDDFMHPPEP);
-        _logger.LogDebug($"GMGMMCENIPA: {GMGMMCENIPA}");
-
-        var GPJCPFANDGJ = (float)FDDDFMHPPEP_T.GetField("GPJCPFANDGJ",
-                BindingFlags.Public | BindingFlags.Instance)
-            .GetValue(FDDDFMHPPEP);
-        _logger.LogDebug($"GPJCPFANDGJ: {GPJCPFANDGJ}");
-
-        var DCCOCLOMLGA = (float)FDDDFMHPPEP_T.GetField("DCCOCLOMLGA",
-                BindingFlags.Public | BindingFlags.Instance)
-            .GetValue(FDDDFMHPPEP);
-        _logger.LogDebug($"DCCOCLOMLGA: {DCCOCLOMLGA}");
-
-        // Ball position. Skip logging this since it's well understood.
-        var GGAEPNHCLEM = FDDDFMHPPEP_T.GetField("GGAEPNHCLEM",
-                BindingFlags.Public | BindingFlags.Instance)
-            .GetValue(FDDDFMHPPEP);
-
-        var CEGFOPNGEKB = (float)FDDDFMHPPEP_T.GetField("CEGFOPNGEKB",
-                BindingFlags.Public | BindingFlags.Instance)
-            .GetValue(FDDDFMHPPEP);
-        _logger.LogDebug($"CEGFOPNGEKB: {CEGFOPNGEKB}");
-
-        var EGHIKFPPDKJ = (float)FDDDFMHPPEP_T.GetField("EGHIKFPPDKJ",
-                BindingFlags.Public | BindingFlags.Instance)
-            .GetValue(FDDDFMHPPEP);
-        _logger.LogDebug($"EGHIKFPPDKJ: {EGHIKFPPDKJ}");
-        _logger.LogDebug("");
-
-
-        /////////////////
-        // GGEGJMKCNOP //
-        /////////////////
-
-        var GGEGJMKCNOP_T = GGEGJMKCNOP.GetType();
-        _logger.LogDebug("GGEGJMKCNOP");
-
-
-        var BMINEIHGFLI = (float)GGEGJMKCNOP_T.GetField("BMINEIHGFLI",
-                BindingFlags.Public | BindingFlags.Instance)
-            .GetValue(GGEGJMKCNOP);
-        _logger.LogDebug($"BMINEIHGFLI: {BMINEIHGFLI}");
-
-        var DHDLBIEFGMM = (float)GGEGJMKCNOP_T.GetField("DHDLBIEFGMM",
-                BindingFlags.Public | BindingFlags.Instance)
-            .GetValue(GGEGJMKCNOP);
-        _logger.LogDebug($"DHDLBIEFGMM: {DHDLBIEFGMM}");
-
-        var OFFCCJAAMLG = (float)GGEGJMKCNOP_T.GetField("OFFCCJAAMLG",
-                BindingFlags.Public | BindingFlags.Instance)
-            .GetValue(GGEGJMKCNOP);
-        _logger.LogDebug($"OFFCCJAAMLG: {OFFCCJAAMLG}");
-
-        var MFLAAMECNIN = (float)GGEGJMKCNOP_T.GetField("MFLAAMECNIN",
-                BindingFlags.Public | BindingFlags.Instance)
-            .GetValue(GGEGJMKCNOP);
-        _logger.LogDebug($"MFLAAMECNIN: {MFLAAMECNIN}");
-
-        var AICPAFBKOPI = (float)GGEGJMKCNOP_T.GetField("AICPAFBKOPI",
-                BindingFlags.Public | BindingFlags.Instance)
-            .GetValue(GGEGJMKCNOP);
-        _logger.LogDebug($"AICPAFBKOPI: {AICPAFBKOPI}");
-
-        _logger.LogDebug("");
-
-
-        /////////////////
-        // MHLDAHLDJFE //
-        /////////////////
-
-        var MHLDAHLDJFE_T = MHLDAHLDJFE.GetType();
-        _logger.LogDebug("MHLDAHLDJFE");
-
-        var LDBEJLOAIGA = (float)MHLDAHLDJFE_T.GetField("LDBEJLOAIGA",
-                BindingFlags.Public | BindingFlags.Instance)
-            .GetValue(MHLDAHLDJFE);
-        _logger.LogDebug($"LDBEJLOAIGA: {LDBEJLOAIGA}");
-
-        var MOHJFAFEDJH = (float)MHLDAHLDJFE_T.GetField("MOHJFAFEDJH",
-                BindingFlags.Public | BindingFlags.Instance)
-            .GetValue(MHLDAHLDJFE);
-        _logger.LogDebug($"MOHJFAFEDJH: {MOHJFAFEDJH}");
-
-        var ICLAHNLNFDM = (float)MHLDAHLDJFE_T.GetField("ICLAHNLNFDM",
-                BindingFlags.Public | BindingFlags.Instance)
-            .GetValue(MHLDAHLDJFE);
-        _logger.LogDebug($"ICLAHNLNFDM: {ICLAHNLNFDM}");
-
-        var CKDBDCGNPCE = (float)MHLDAHLDJFE_T.GetField("CKDBDCGNPCE",
-                BindingFlags.Public | BindingFlags.Instance)
-            .GetValue(MHLDAHLDJFE);
-        _logger.LogDebug($"CKDBDCGNPCE: {CKDBDCGNPCE}");
-
-        var CJLCPKGMDCO = (int)MHLDAHLDJFE_T.GetField("CJLCPKGMDCO",
-                BindingFlags.Public | BindingFlags.Instance)
-            .GetValue(MHLDAHLDJFE);
-        _logger.LogDebug($"CJLCPKGMDCO: {CJLCPKGMDCO}");
-
-        var BPLEKFJJBMM = (Array)MHLDAHLDJFE_T.GetField("BPLEKFJJBMM",
-                BindingFlags.Public | BindingFlags.Instance)?
-            .GetValue(MHLDAHLDJFE);
-
-        for (var i = 0; i < BPLEKFJJBMM.Length; i++)
-        {
-            /////////////////
-            // BPLEKFJJBMM //
-            /////////////////
-            _logger.LogDebug($"MHLDAHLDJFE.BPLEKFJJBMM ({i} of {BPLEKFJJBMM.Length})");
-
-            var BPLEKFJJBMM_I = BPLEKFJJBMM.GetValue(i);
-            var BPLEKFJJBMM_T = BPLEKFJJBMM_I.GetType();
-
-            var OJJHFHHPKEK = (double)BPLEKFJJBMM_T.GetField("OJJHFHHPKEK",
-                    BindingFlags.Public | BindingFlags.Instance)
-                .GetValue(BPLEKFJJBMM_I);
-            _logger.LogDebug($"OJJHFHHPKEK: {OJJHFHHPKEK}");
-
-            var KPDFFNKIHEI = (double)BPLEKFJJBMM_T.GetField("KPDFFNKIHEI",
-                    BindingFlags.Public | BindingFlags.Instance)
-                .GetValue(BPLEKFJJBMM_I);
-            _logger.LogDebug($"KPDFFNKIHEI: {KPDFFNKIHEI}");
-
-            var OLEKBKBEEIN = (double)BPLEKFJJBMM_T.GetField("OLEKBKBEEIN",
-                    BindingFlags.Public | BindingFlags.Instance)
-                .GetValue(BPLEKFJJBMM_I);
-            _logger.LogDebug($"OLEKBKBEEIN: {OLEKBKBEEIN}");
-
-            var EIGPIOFLFPP = (double)BPLEKFJJBMM_T.GetField("EIGPIOFLFPP",
-                    BindingFlags.Public | BindingFlags.Instance)
-                .GetValue(BPLEKFJJBMM_I);
-            _logger.LogDebug($"EIGPIOFLFPP: {EIGPIOFLFPP}");
-        }
-
-        _logger.LogDebug("");
-
-
-        /////////////////
-        // LDLMHJGLBDF //
-        /////////////////
-
-        var LDLMHJGLBDF_T = LDLMHJGLBDF.GetType();
-        _logger.LogDebug("LDLMHJGLBDF");
-
-        var LDBEJLOAIGA2 = (float)LDLMHJGLBDF_T.GetField("LDBEJLOAIGA",
-                BindingFlags.Public | BindingFlags.Instance)
-            .GetValue(LDLMHJGLBDF);
-        _logger.LogDebug($"LDBEJLOAIGA: {LDBEJLOAIGA2}");
-
-        var MOHJFAFEDJH2 = (float)LDLMHJGLBDF_T.GetField("MOHJFAFEDJH",
-                BindingFlags.Public | BindingFlags.Instance)
-            .GetValue(LDLMHJGLBDF);
-        _logger.LogDebug($"MOHJFAFEDJH: {MOHJFAFEDJH2}");
-
-        var ICLAHNLNFDM2 = (float)LDLMHJGLBDF_T.GetField("ICLAHNLNFDM",
-                BindingFlags.Public | BindingFlags.Instance)
-            .GetValue(LDLMHJGLBDF);
-        _logger.LogDebug($"ICLAHNLNFDM: {ICLAHNLNFDM2}");
-
-        var CKDBDCGNPCE2 = (float)LDLMHJGLBDF_T.GetField("CKDBDCGNPCE",
-                BindingFlags.Public | BindingFlags.Instance)
-            .GetValue(LDLMHJGLBDF);
-        _logger.LogDebug($"CKDBDCGNPCE: {CKDBDCGNPCE2}");
-
-        var CJLCPKGMDCO2 = (int)LDLMHJGLBDF_T.GetField("CJLCPKGMDCO",
-                BindingFlags.Public | BindingFlags.Instance)
-            .GetValue(LDLMHJGLBDF);
-        _logger.LogDebug($"CJLCPKGMDCO: {CJLCPKGMDCO2}");
-
-        var BPLEKFJJBMM2 = (Array)LDLMHJGLBDF_T.GetField("BPLEKFJJBMM",
-                BindingFlags.Public | BindingFlags.Instance)?
-            .GetValue(LDLMHJGLBDF) ?? new object[] { };
-
-        for (var i = 0; i < BPLEKFJJBMM2.Length; i++)
-        {
-            /////////////////
-            // BPLEKFJJBMM //
-            /////////////////
-            _logger.LogDebug($"MHLDAHLDJFE.BPLEKFJJBMM ({i} of {BPLEKFJJBMM2.Length})");
-
-            var BPLEKFJJBMM_I = BPLEKFJJBMM2.GetValue(i);
-            var BPLEKFJJBMM_T = BPLEKFJJBMM2.GetType();
-
-            var OJJHFHHPKEK = (double)BPLEKFJJBMM_T.GetField("OJJHFHHPKEK",
-                    BindingFlags.Public | BindingFlags.Instance)
-                .GetValue(BPLEKFJJBMM_I);
-            _logger.LogDebug($"OJJHFHHPKEK: {OJJHFHHPKEK}");
-
-            var KPDFFNKIHEI = (double)BPLEKFJJBMM_T.GetField("KPDFFNKIHEI",
-                    BindingFlags.Public | BindingFlags.Instance)
-                .GetValue(BPLEKFJJBMM_I);
-            _logger.LogDebug($"KPDFFNKIHEI: {KPDFFNKIHEI}");
-
-            var OLEKBKBEEIN = (double)BPLEKFJJBMM_T.GetField("OLEKBKBEEIN",
-                    BindingFlags.Public | BindingFlags.Instance)
-                .GetValue(BPLEKFJJBMM_I);
-            _logger.LogDebug($"OLEKBKBEEIN: {OLEKBKBEEIN}");
-
-            var EIGPIOFLFPP = (double)BPLEKFJJBMM_T.GetField("EIGPIOFLFPP",
-                    BindingFlags.Public | BindingFlags.Instance)
-                .GetValue(BPLEKFJJBMM_I);
-            _logger.LogDebug($"EIGPIOFLFPP: {EIGPIOFLFPP}");
-        }
-
-        _logger.LogDebug("");
-
-
-        /////////////////
-        // DLIIJJNCIPP //
-        /////////////////
-
-        // Shot valid data. Skip this since these values are well understood
+        // Raw data logging omitted for brevity
     }
 
     internal void ToggleHandedness()
